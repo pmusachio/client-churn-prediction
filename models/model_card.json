@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "trained_at": "2026-06-14T14:01:23+00:00",
+  "dataset": "mervetorkan/churndataset",
+  "data_sha256": "3996cd1fa372e0db0cd9c0ebac35bbd4e8e3c65fb942bb010c826e7b1eeef0a0",
+  "target": "Exited",
+  "problem": "churn propensity ranking (imbalanced binary classification)",
+  "best_model": "hist_gb",
+  "best_params": {
+    "clf__max_leaf_nodes": 31,
+    "clf__max_iter": 400,
+    "clf__max_depth": 4,
+    "clf__learning_rate": 0.024677871148904736,
+    "clf__l2_regularization": 0.0
+  },
+  "cv_selection": [
+    {
+      "model": "hist_gb",
+      "roc_auc_mean": 0.8536674981460257,
+      "roc_auc_std": 0.013392738580409173
+    },
+    {
+      "model": "random_forest",
+      "roc_auc_mean": 0.8536393273685123,
+      "roc_auc_std": 0.011401054438337197
+    },
+    {
+      "model": "logreg",
+      "roc_auc_mean": 0.7657510762681665,
+      "roc_auc_std": 0.021284753567530443
+    }
+  ],
+  "baseline": {
+    "model": "LogisticRegression (balanced)",
+    "roc_auc": 0.776420488284895,
+    "average_precision": 0.4667187567499529
+  },
+  "holdout": {
+    "roc_auc": 0.8698035477696496,
+    "average_precision": 0.719786879378409,
+    "base_rate": 0.2037,
+    "capacities": {
+      "200": {
+        "precision_at_k": 0.84,
+        "lift_at_k": 4.124,
+        "churners_captured_pct": 41.3
+      },
+      "500": {
+        "precision_at_k": 0.578,
+        "lift_at_k": 2.838,
+        "churners_captured_pct": 71.0
+      },
+      "1000": {
+        "precision_at_k": 0.366,
+        "lift_at_k": 1.797,
+        "churners_captured_pct": 89.9
+      }
+    },
+    "roc_auc_by_slice": {
+      "Geography=France": 0.8572,
+      "Geography=Germany": 0.8679,
+      "Geography=Spain": 0.8738,
+      "IsActiveMember=0": 0.8684,
+      "IsActiveMember=1": 0.8564
+    }
+  },
+  "business": {
+    "headline": "Targeting the top 1,000 ranked customers reaches 89.9% of churners, 1.797x more efficient than random retention outreach.",
+    "lift_at_1000": 1.797,
+    "churners_captured_pct_at_1000": 89.9
+  },
+  "top_features": [
+    {
+      "feature": "Age",
+      "importance": 0.12169
+    },
+    {
+      "feature": "NumOfProducts",
+      "importance": 0.11919
+    },
+    {
+      "feature": "Balance",
+      "importance": 0.04094
+    },
+    {
+      "feature": "IsActiveMember",
+      "importance": 0.03252
+    },
+    {
+      "feature": "Geography",
+      "importance": 0.02387
+    },
+    {
+      "feature": "Gender",
+      "importance": 0.00721
+    },
+    {
+      "feature": "EstimatedSalary",
+      "importance": 0.00068
+    },
+    {
+      "feature": "CreditScore",
+      "importance": 0.00024
+    }
+  ]
+}

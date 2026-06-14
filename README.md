@@ -1,294 +1,112 @@
-# Client Churn Prediction
+# Client Churn Prediction — Retention Ranking
 
-> **End-to-end machine learning project** — rank bank customers by churn probability to guide targeted retention campaigns.
-
-[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://python.org)
-[![Scikit-Learn](https://img.shields.io/badge/scikit--learn-1.4%2B-orange)](https://scikit-learn.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-green)](https://fastapi.tiangolo.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
-
----
+> Imbalanced classification · Churn propensity ranking · Lift and cumulative gains
 
 ## Business Problem
 
-A retail bank needs to identify which customers are most likely to close their accounts (churn) so the retention team can act proactively. The current approach — contacting customers at random — wastes budget and misses high-risk clients.
+A retail bank loses revenue when customers close their accounts. Retention offers (fee waivers,
+rate improvements, outreach) cost money, so they cannot be sent to everyone. The decision the
+model informs is **which customers to target for retention first**: it scores each customer's
+churn probability and the team works the ranked list down to its budget.
 
-**Objective:** Build a scoring model that ranks customers by churn probability, allowing the retention team to focus their limited budget on the top-k highest-risk customers.
+The cost of error is asymmetric. A false positive spends a retention incentive on a customer who
+would have stayed anyway; a false negative loses a customer who could have been saved, forfeiting
+their lifetime value. Because the retention budget is the binding constraint, the model is judged
+on **lift at capacity** rather than raw accuracy.
 
-**Primary metrics:** ROC AUC · Average Precision · Recall@k · Lift@k
-
----
-
-## Solution Strategy
-
-This project follows the **8-step end-to-end ML workflow** from Aurélien Géron's *Hands-On Machine Learning with Scikit-Learn and PyTorch* (O'Reilly, 2025):
-
-| Step | Notebook | Description |
-|------|----------|-------------|
-| 1. Frame the problem | `01_business_understanding` | Business context, metrics, ML framing |
-| 2. Get & explore data | `02_data_exploration` | EDA, distributions, correlations, insights |
-| 3. Feature engineering | `03_feature_engineering` | Domain features, sklearn transformers |
-| 4. Select a model | `04_model_comparison` | 4 models compared via stratified CV |
-| 5. Fine-tune | `05_hyperparameter_tuning` | RandomizedSearchCV, feature importance, ROI |
-| 6. Deploy | `06_deployment` | FastAPI endpoint, batch scoring, cloud deploy |
-
----
+A static rule ("target everyone in Germany with one product") was rejected: it captures part of
+the signal but cannot weigh age, activity, balance and tenure together the way the model does.
 
 ## Dataset
 
-Source: [Kaggle — Churn Modelling Dataset](https://www.kaggle.com/datasets/mervetorkan/churndataset)
+[Churn Modelling dataset](https://www.kaggle.com/datasets/mervetorkan/churndataset)
 
 | Property | Value |
-|---|---|
+|----------|-------|
 | Rows | 10,000 customers |
-| Features | 13 (CreditScore, Geography, Gender, Age, Tenure, Balance, NumOfProducts, HasCrCard, IsActiveMember, EstimatedSalary) |
-| Target | `Exited` (1 = churned, 0 = stayed) |
-| Class imbalance | ~20% positive (churned) |
+| Target | `Exited` (1 = closed the account) |
+| Positive rate | 20.4% |
+| Key features | `Age`, `NumOfProducts`, `Balance`, `IsActiveMember`, `Geography`, `Tenure` |
 
----
+## Solution Strategy
 
-## Top Data Insights
+1. **Acquisition** — pull the dataset from Kaggle on demand; a versioned stratified sample backs an offline run.
+2. **Leakage control** — every attribute is observed while the customer is still active, so there is no target leakage; the `RowNumber`, `CustomerId` and `Surname` identifiers are dropped.
+3. **Feature engineering and encoding** — engineered ratios plus binary `Gender` and one-hot `Geography`, all inside the model `Pipeline` so serving reuses the exact transform.
+4. **Imbalance** — handled with `class_weight="balanced"` inside the fitted folds only.
+5. **Model selection** — `StratifiedKFold` cross-validation compares a logistic baseline, random forest and histogram gradient boosting on ROC AUC; the winner is tuned with `RandomizedSearchCV`.
+6. **Evaluation** — ROC AUC and average precision on a stratified holdout, plus lift and churners captured at fixed targeting capacities and ROC AUC by segment.
 
-- Customers with **3–4 products** churn at a much higher rate than those with 1–2 products
-- **Senior customers (Age ≥ 50)** who are inactive have the highest churn propensity
-- **Zero-balance customers** show distinct churn patterns
-- **Geography** (Germany vs France/Spain) significantly influences churn rate
-- Active members churn at roughly half the rate of inactive members
+## Top Insights & Hypotheses
 
----
+- **Age is the strongest churn driver** (permutation importance 0.12): older customers leave more often.
+- **Product holdings are nearly as important** (0.12): single-product customers are far more likely to exit, and customers with three or four products churn at very high rates.
+- **Inactive members and German customers churn more**, consistent with engagement and market effects; the model exploits these alongside balance.
+- **Performance is stable across geographies** (ROC AUC 0.857-0.874), so a single model serves all three markets.
 
 ## Engineered Features
 
-Domain-informed features created from raw attributes (inspired by Géron Ch. 2 feature engineering principles):
+| Feature | Formula | Business signal |
+|---------|---------|-----------------|
+| BalanceSalaryRatio | `Balance / (EstimatedSalary + 1)` | Wealth concentration in the account relative to income. |
+| ZeroBalance | `1 if Balance == 0 else 0` | A zeroed balance often precedes account closure. |
+| ProductsPerTenure | `NumOfProducts / (Tenure + 1)` | Product uptake rate; rapid accumulation can signal mis-selling and churn. |
 
-| Feature | Formula | Business Signal |
-|---|---|---|
-| `is_zero_balance` | Balance == 0 | Disengagement signal |
-| `balance_per_product` | Balance / NumOfProducts | Wallet share per product |
-| `balance_salary_ratio` | Balance / EstimatedSalary | Relative wealth commitment |
-| `age_tenure_ratio` | Age / (Tenure + 1) | Life stage vs loyalty |
-| `senior_inactive` | Age ≥ 50 AND IsActiveMember == 0 | High-risk segment flag |
-| `products_active_combo` | NumOfProducts × IsActiveMember | Engagement depth |
-| `credit_score_band` | Binned CreditScore | Risk category |
+## Model
 
----
+A histogram gradient boosting classifier (selected by cross-validation, tuned with randomized
+search) inside a `Pipeline` that owns the engineering and encoding. The logistic baseline sets the
+bar the final model must clear.
 
-## Model Performance
+| Model | CV ROC AUC | Holdout ROC AUC | Holdout AP |
+|-------|-----------:|----------------:|-----------:|
+| Logistic baseline | 0.766 | 0.776 | — |
+| Random forest | 0.854 | — | — |
+| **Hist gradient boosting (final)** | **0.854** | **0.870** | **0.720** |
 
-Training uses a **Gradient Boosting Classifier** selected via 5-fold stratified cross-validation against Logistic Regression, Random Forest, and Extra Trees.
+## Business Results
 
-**Cross-validation model comparison (5-fold StratifiedKFold):**
+Ranking the holdout by churn score and targeting top-N customers:
 
-| Model | ROC AUC | Avg Precision | F1 |
-|---|---|---|---|
-| **Gradient Boosting** | **0.862 ± 0.006** | **0.700** | **0.596** |
-| Random Forest | 0.847 ± 0.011 | 0.653 | 0.578 |
-| Extra Trees | 0.837 ± 0.005 | 0.636 | 0.548 |
-| Logistic Regression | 0.798 ± 0.013 | 0.550 | 0.517 |
+| Targeted | Precision@k | Lift vs random | Churners captured |
+|----------|------------:|---------------:|------------------:|
+| 200 | 84.0% | 4.12x | 41.3% |
+| 500 | 57.8% | 2.84x | 71.0% |
+| 1,000 | 36.6% | 1.80x | 89.9% |
 
-**Final model metrics (held-out 20% test set):**
+Targeting the 200 highest-risk customers reaches **41% of all churners at 4.1x** the efficiency of
+random outreach; extending to the top 1,000 captures **90%** of churn. The bank can size the
+campaign to its budget and read the expected coverage straight off the curve.
 
-| Metric | Value |
-|---|---|
-| ROC AUC | 0.862 |
-| Average Precision | 0.703 |
-| Lift@500 | 2.75× |
-| Lift@1000 | 1.79× |
+## How to Run
 
-> Exact values depend on the random seed. Re-run `make train` to reproduce.
-
----
-
-## Quick Start for Recruiters
-
-### Option A — Google Colab (no local setup needed)
-
-```python
-# 1. Clone and install
-REPO = "https://github.com/<your-username>/client-churn-prediction.git"
-!git clone {REPO} project && %cd project
-!pip install -q -r requirements.txt
-
-# 2. Download data
-from google.colab import files
-files.upload()          # upload kaggle.json
-!mkdir -p ~/.kaggle && cp kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json
-!mkdir -p data/raw
-!kaggle datasets download -d mervetorkan/churndataset --unzip -p data/raw
-!mv data/raw/Churn_Modelling.csv data/raw/churn.csv 2>/dev/null || true
-
-# 3. Run the full pipeline
-!PYTHONPATH=src python -m client_churn_prediction.cli profile
-!PYTHONPATH=src python -m client_churn_prediction.cli train
-
-# 4. Inspect results
-import json, pathlib
-print(json.loads(pathlib.Path("reports/metrics.json").read_text()))
-```
-
-### Option B — Local (Docker-free)
-
-```bash
-# 1. Clone
-git clone https://github.com/<your-username>/client-churn-prediction.git
-cd client-churn-prediction
-
-# 2. Setup environment
-make setup
-source .venv/bin/activate
-
-# 3. Download data (requires Kaggle CLI configured)
-make data
-# — or manually place data/raw/churn.csv
-
-# 4. Run pipeline
-make profile    # profile raw data
-make train      # train model → saves models/model.joblib + reports/metrics.json
-make predict    # score all customers → data/processed/predictions.csv
-
-# 5. Start REST API
-make api
-# → http://localhost:8000/docs (Swagger UI)
-```
-
-### Option C — One command (all steps)
-
-```bash
-make run-all
-```
-
----
-
-## REST API
-
-After `make train`, start the API with `make api` and call it:
-
-```bash
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "records": [{
-      "CreditScore": 619,
-      "Geography": "France",
-      "Gender": "Female",
-      "Age": 42,
-      "Tenure": 2,
-      "Balance": 0.0,
-      "NumOfProducts": 1,
-      "HasCrCard": 1,
-      "IsActiveMember": 1,
-      "EstimatedSalary": 101349.76
-    }]
-  }'
-```
-
-**Response:**
-```json
-{
-  "prediction": [1],
-  "score": [0.73]
-}
-```
-
-Swagger docs: `http://localhost:8000/docs`
-
----
-
-## Repository Structure
-
-```
-client-churn-prediction/
-├── configs/
-│   └── project.toml          # project contract: data, model, evaluation params
-├── data/
-│   ├── raw/churn.csv          # source data (not tracked in git)
-│   ├── interim/               # intermediate processed files
-│   └── processed/predictions.csv
-├── models/
-│   └── model.joblib           # serialized sklearn Pipeline
-├── notebooks/
-│   ├── 01_business_understanding.ipynb
-│   ├── 02_data_exploration.ipynb
-│   ├── 03_feature_engineering.ipynb
-│   ├── 04_model_comparison.ipynb
-│   ├── 05_hyperparameter_tuning.ipynb
-│   └── 06_deployment.ipynb
-├── reports/
-│   ├── metrics.json           # validation metrics
-│   └── data_profile.json      # data profiling output
-├── scripts/
-│   └── sample_api_request.py  # API consumption example
-├── src/
-│   └── client_churn_prediction/
-│       ├── api.py             # FastAPI application
-│       ├── cli.py             # CLI entry-points
-│       ├── config.py          # config loader
-│       ├── data.py            # data loading & profiling
-│       ├── features.py        # feature engineering (churn domain)
-│       └── models.py          # training, CV comparison, tuning, prediction
-├── tests/
-├── Makefile                   # automation commands
-├── Procfile                   # cloud deployment process file
-├── requirements.txt
-└── requirements-api.txt
-```
-
----
-
-## Running the Notebooks
-
-```bash
-make notebooks
-# Opens JupyterLab at http://localhost:8888
-# Run notebooks in order: 01 → 02 → 03 → 04 → 05 → 06
-```
-
----
-
-## Make Commands Reference
-
-| Command | Description |
-|---|---|
-| `make setup` | Create venv and install all dependencies |
-| `make profile` | Profile raw data → `reports/data_profile.json` |
-| `make train` | Train model → `models/model.joblib` + `reports/metrics.json` |
-| `make compare` | Cross-validate 4 models and print comparison table |
-| `make tune` | Run RandomizedSearchCV and print best hyperparameters |
-| `make predict` | Batch score all customers → `data/processed/predictions.csv` |
-| `make api` | Start FastAPI server at `localhost:8000` |
-| `make test` | Run test suite |
-| `make run-all` | Profile + train + predict in one shot |
-| `make clean` | Remove caches and compiled files |
-
----
-
-## Tech Stack
-
-| Layer | Library |
-|---|---|
-| Data manipulation | pandas, numpy |
-| ML pipeline | scikit-learn (Pipeline, ColumnTransformer) |
-| Models | GradientBoostingClassifier, RandomForest, LogisticRegression |
-| Hyperparameter tuning | RandomizedSearchCV (scikit-learn) |
-| Model serialization | joblib |
-| REST API | FastAPI + Uvicorn |
-| Visualization | matplotlib, seaborn |
-| Config | TOML |
-| Testing | pytest |
-
----
-
-## References
-
-- Géron, A. (2025). *Hands-On Machine Learning with Scikit-Learn and PyTorch*. O'Reilly Media.
-- Dataset: [Churn Modelling — Kaggle](https://www.kaggle.com/datasets/mervetorkan/churndataset)
-
----
+1. **Clone**
+   ```
+   git clone https://github.com/pmusachio/client-churn-prediction.git
+   cd client-churn-prediction
+   ```
+2. **Environment**
+   ```
+   python -m venv .venv && source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+3. **Kaggle access** — place a Kaggle API token at `~/.kaggle/`; the pipeline falls back to the versioned sample if none is present.
+4. **Run the pipeline**
+   ```
+   python -m src.pipeline
+   ```
+5. **Tests**
+   ```
+   pytest tests/
+   ```
+6. **App (local)**
+   ```
+   streamlit run app/streamlit_app.py
+   ```
+7. **Live app** — [huggingface.co/spaces/pmusachio/client-churn-prediction](https://huggingface.co/spaces/pmusachio/client-churn-prediction) — score a customer and explore the retention campaign view.
 
 ## Next Steps
 
-- [ ] Add SHAP explainability for individual predictions
-- [ ] Build gain/lift curves by decile
-- [ ] Estimate campaign ROI per contact budget
-- [ ] Publish batch-scoring endpoint for full customer portfolio
-- [ ] Add model monitoring with data drift detection
+- Add behavioural and transaction-trend features (declining balance, falling activity) which tend to lead churn and are not in the current snapshot.
+- Calibrate probabilities and attach a customer-lifetime-value estimate so targeting maximizes expected saved value rather than raw churn probability; deferred until CLV inputs are available.
+- Monitor for drift and refit on a schedule, since churn behaviour shifts with product and pricing changes; deferred to a deployment phase.

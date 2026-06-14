@@ -1,20 +1,22 @@
-.DS_Store
-.env
-.venv/
-venv/
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
-*.pyc
-models/*.joblib
-models/*.pkl
-reports/*.json
-reports/*.csv
-reports/figures/*.png
-data/interim/*
-data/processed/*
-!data/interim/.gitkeep
-!data/processed/.gitkeep
-data/raw/*.zip
-mlruns/
+.mypy_cache/
+
+# Environments
+.venv/
+venv/
+env/
+.env
+
+# Data: raw is downloaded on demand, processed is a regenerable build artifact.
+data/raw/
+data/interim/
+data/processed/
+
+# OS / editor
+.DS_Store
 .ipynb_checkpoints/
